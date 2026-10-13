@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Contact CramRoad Study - report a correction or suggest a new topic.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg?v=3">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon.png?v=3">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
+<meta name="theme-color" content="#4c1d95">
+<title>Contact - CramRoad Study</title>
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5190427314442867"
+     crossorigin="anonymous"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',Arial,Helvetica,sans-serif;background:linear-gradient(180deg,#fffbeb 0%,#eff6ff 35%,#faf5ff 70%,#fff 100%);color:#0f172a;min-height:100vh}
+header{position:sticky;top:0;z-index:50;width:100%;padding:14px 6%;display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.9);backdrop-filter:blur(12px);border-bottom:1px solid #f1f5f9}
+.brand{font-size:22px;font-weight:900;color:#0f172a;text-decoration:none}
+.brand{display:flex;align-items:center;gap:10px}.brand-logo{height:42px;width:42px;border-radius:50%;box-shadow:0 4px 12px rgba(0,0,0,.2)}.brand span{background:linear-gradient(90deg,#f97316,#ec4899);-webkit-background-clip:text;background-clip:text;color:transparent}
+nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+nav a{text-decoration:none;font-size:14px;font-weight:700;padding:9px 16px;border-radius:999px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;transition:.2s}
+nav a:hover,.active{color:#fff !important;background:linear-gradient(90deg,#2563eb,#7c3aed);border-color:transparent}
+.page-hero{margin:22px auto;width:88%;border-radius:28px;background:linear-gradient(120deg,#0f172a,#4c1d95,#be185d);color:#fff;padding:56px;box-shadow:0 20px 50px rgba(76,29,149,.35)}
+.page-hero h1{font-size:42px;margin-bottom:12px}
+.page-hero h1 .hl{background:linear-gradient(90deg,#fde68a,#fb7185,#f0abfc);-webkit-background-clip:text;background-clip:text;color:transparent}
+.page-hero p{color:#e9d5ff;line-height:1.7;max-width:640px;font-size:15.5px}
+.wrap{width:88%;margin:40px auto;max-width:900px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{background:#fff;border:1px solid #f1f5f9;border-radius:20px;box-shadow:0 10px 28px rgba(15,23,42,.09);padding:30px}
+.card h2{font-size:20px;margin-bottom:12px}
+.card p{font-size:14.5px;color:#475569;line-height:1.75}
+.info{margin-top:14px;background:#f8fafc;border:2px solid #e2e8f0;border-radius:14px;padding:14px 16px;font-size:14px}
+.info b{display:block;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#7c3aed;margin-bottom:4px}
+.founder-box{padding:10px}
+.founder-photo{width:100%;height:auto;border-radius:12px;display:block;margin-top:8px;box-shadow:0 8px 20px rgba(15,23,42,.15)}
+label{display:block;font-size:13px;font-weight:800;margin:14px 0 6px;color:#334155}
+input,textarea{width:100%;border:2px solid #e2e8f0;border-radius:12px;padding:12px 14px;font-size:14px;font-family:inherit;outline:none}
+input:focus,textarea:focus{border-color:#7c3aed}
+textarea{min-height:120px;resize:vertical}
+button{margin-top:16px;border:none;background:linear-gradient(90deg,#f59e0b,#ef4444);color:#fff;padding:13px 28px;border-radius:999px;cursor:pointer;font-weight:800;font-size:14px;width:100%}
+button:hover{filter:brightness(1.08)}
+.note{font-size:12.5px;color:#94a3b8;margin-top:10px;line-height:1.6}
+footer{padding:26px;text-align:center;background:#020617;color:#cbd5e1;font-size:13px;margin-top:50px}
+.flinks{display:block;margin-top:10px}
+.flinks a{color:#fde68a;text-decoration:none;margin:0 10px;font-weight:700}
+.flinks a:hover{color:#fff}
+@media(max-width:700px){nav{display:none}.page-hero{width:94%;padding:36px 24px}.page-hero h1{font-size:30px}.wrap{width:94%;grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><a class="brand" href="index.html"><img class="brand-logo" src="logo.svg" alt="CramRoad Study logo">CramRoad <span>Study</span></a><nav><a href="index.html">Home</a><a href="index.html#subjects">Popular Subjects</a><a href="about.html">About</a><a href="contact.html" class="active">Contact</a></nav></header>
+<section class="page-hero"><h1>Contact <span class="hl">Us</span></h1><p>Found a mistake in a chapter, want a new topic, or just want to say hello? Send us a message — we read everything.</p></section>
+<div class="wrap">
+<div class="card"><h2>Get in touch</h2><p>Fill in the form and your email app will open with the message ready to send.</p>
+<label for="cname">Your name</label><input id="cname" type="text" placeholder="Your name">
+<label for="csub">Subject</label><input id="csub" type="text" placeholder="e.g. Correction in Rotational Motion">
+<label for="cmsg">Message</label><textarea id="cmsg" placeholder="Describe the issue or suggestion..."></textarea>
+<button onclick="sendMsg()">Send Message</button>
+<p class="note">This site is fully static, so the button opens your own email app — nothing is uploaded or stored anywhere.</p></div>
+<div class="card"><h2>Other ways to reach us</h2>
+<div class="info"><b>Email</b>cramroad.study@gmail.com</div>
+<div class="info"><b>Contact No.</b><a href="tel:9955404092" style="color:#0f172a;text-decoration:none;font-weight:700">9955404092</a></div>
+<div class="info"><b>Response time</b>We usually reply within 2–3 days.</div>
+<div class="info founder-box"><b>Founder & Creator</b><img src="founder-suraj-singh.jpg" alt="Suraj Singh - Founder & Creator of CramRoad Study" class="founder-photo"></div>
+<div class="info"><b>What to include</b>Subject name + chapter name + topic (e.g. Physics → Rotational Motion → Moment of Inertia) so we can fix things fast.</div>
+<p style="margin-top:14px">Before writing, please check the <a href="about.html" style="color:#7c3aed;font-weight:700">About page</a> — it answers most questions about how the site works.</p></div>
+</div>
+<footer>© 2026 CramRoad Study • Learn • Practice • Succeed • All rights reserved<span class="flinks"><a href="about.html">About</a><a href="contact.html">Contact</a><a href="privacy.html">Privacy Policy</a><a href="terms.html">Terms of Use</a></span></footer>
+<script>
+function sendMsg(){
+  var n=document.getElementById('cname').value.trim();
+  var s=document.getElementById('csub').value.trim()||'Feedback for CramRoad Study';
+  var m=document.getElementById('cmsg').value.trim();
+  if(!m){alert('Please write a message first.');return;}
+  var body=encodeURIComponent((n?('Name: '+n+'\n\n'):'')+m);
+  window.location.href='mailto:cramroad.study@gmail.com?subject='+encodeURIComponent(s)+'&body='+body;
+}
+</script>
+</body>
+</html>

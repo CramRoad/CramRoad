@@ -1,0 +1,73 @@
+<svg viewBox="0 0 1254 1254" xmlns="http://www.w3.org/2000/svg" width="512" height="512" role="img" aria-label="CramRoad Study logo">
+  <defs>
+    <linearGradient id="ring" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+      <stop offset="0" stop-color="#0b4fa8"/>
+      <stop offset="0.45" stop-color="#0b7a80"/>
+      <stop offset="1" stop-color="#63b32e"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a3f94"/>
+      <stop offset="0.55" stop-color="#0a66c2"/>
+      <stop offset="1" stop-color="#0a4aa0"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#1fa58a"/>
+      <stop offset="0.35" stop-color="#6cc93a"/>
+      <stop offset="0.7" stop-color="#3fa02a"/>
+      <stop offset="1" stop-color="#4aa62a"/>
+    </linearGradient>
+    <linearGradient id="greenBoard" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#1fa58a"/>
+      <stop offset="0.5" stop-color="#5cc23a"/>
+      <stop offset="1" stop-color="#78b81a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- white background -->
+  <rect width="1254" height="1254" fill="#fff"/>
+
+  <!-- outer ring -->
+  <circle cx="623" cy="630" r="543" fill="none" stroke="url(#ring)" stroke-width="26"/>
+
+  <!-- graduation cap: blue (left) half -->
+  <path d="M628 172 L228 326 Q214 340 232 350 L292 374 L380 418
+           C470 372 600 335 760 325 L628 322 Z" fill="url(#blue)"/>
+  <path d="M383 436 C480 392 600 352 760 330
+           C660 350 590 380 585 410 C585 440 620 465 650 490
+           C675 515 672 545 655 570 C620 615 550 640 505 688
+           C450 655 405 615 383 583 Z" fill="url(#blue)"/>
+
+  <!-- graduation cap: green (right) half -->
+  <path d="M628 172 L1022 326 Q1034 340 1018 348 L875 410 L878 588
+           C860 625 800 670 698 716
+           C740 665 790 615 790 555 C790 500 745 468 700 448
+           C665 430 632 415 645 392 C665 360 740 335 823 322
+           L628 322 Z" fill="url(#green)"/>
+  <!-- green board top highlight -->
+  <path d="M628 172 L1022 326 Q1034 340 1018 348 L800 440
+           C760 415 700 395 660 385 C700 350 760 330 823 322 L628 322 Z" fill="url(#greenBoard)"/>
+
+  <!-- road dashed centre line -->
+  <path d="M595 708 C640 665 690 620 715 570 C735 520 690 485 650 465
+           C615 448 595 430 605 405 C612 390 630 385 640 380"
+        fill="none" stroke="#0b2c6b" stroke-width="10" stroke-dasharray="30 22"/>
+
+  <!-- tassel -->
+  <line x1="297" y1="380" x2="297" y2="470" stroke="#0b2c6b" stroke-width="8"/>
+  <circle cx="296" cy="490" r="24" fill="#0b2c6b"/>
+  <ellipse cx="296" cy="519" rx="14" ry="10" fill="#0b2c6b"/>
+  <path d="M282 528 L310 528 Q320 580 336 632 Q296 642 256 634 Q270 580 282 528 Z" fill="#0b2c6b"/>
+
+  <!-- text -->
+  <text x="623" y="865" text-anchor="middle" fill="#0b2c6b"
+        font-family="'Poppins', 'Montserrat', Arial, sans-serif" font-weight="700" font-size="150"
+        textLength="792" lengthAdjust="spacingAndGlyphs">CramRoad</text>
+
+  <text x="625" y="972" text-anchor="middle" fill="#1565b8"
+        font-family="'Poppins', 'Montserrat', Arial, sans-serif" font-weight="600" font-size="100"
+        textLength="330" lengthAdjust="spacing">Study</text>
+
+  <!-- green dashes beside "Study" -->
+  <rect x="323" y="934" width="104" height="8" rx="4" fill="#3fa02a"/>
+  <rect x="822" y="934" width="105" height="8" rx="4" fill="#3fa02a"/>
+</svg>
