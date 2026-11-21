@@ -168,10 +168,12 @@ const server = http.createServer((req, res) => {
 // ---------------------------------------------------------------- WebSockets
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 32 * 1024 * 1024 });
 const send = (ws, msg) => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); };
-// The name teammates see is the account's name, whatever the browser claims.
+// The name teammates see is the account's name, whatever the browser claims, and uid (which
+// person this tab belongs to) is the verified account, so tabs of one person group together
+// and nobody can pose as someone else's tab.
 function withAccountName(ws, state) {
   if (!state || typeof state !== 'object') return null;
-  return ws.account ? Object.assign({}, state, { name: ws.account.name }) : state;
+  return ws.account ? Object.assign({}, state, { name: ws.account.name, uid: 'acct-' + ws.account.id }) : state;
 }
 const terminals = createTerminalManager({ dataDir: DATA_DIR, send });
 

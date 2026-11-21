@@ -7,7 +7,7 @@ DRAGON is a browser code editor (15 languages, multi-file projects, live preview
 |---|---|
 | CRDT or OT sync, no lost characters | Own CRDT (RGA) at the top of `src/script.js`, fuzz-tested with 5 users × 3,000 random runs |
 | Offline editing, automatic merge on reconnect | Every change is saved in IndexedDB first; on reconnect both sides swap state vectors and send only what is missing |
-| Live cursors | Named, coloured cursors and selections, plus presence dots in the Explorer |
+| Live cursors | Named, coloured cursors and selections, plus presence dots in the Explorer. One cursor per person: several tabs or devices of one account show as one teammate (the tab they used last), and your own other tabs are never shown as someone else |
 | Per-user undo | Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y only revert your own changes, per file |
 
 ### Beyond the H9 minimum
@@ -242,6 +242,7 @@ disk. The address changes every time you start the tunnel, and the laptop must s
 ```bash
 npm test                                   # CRDT scenarios + random fuzz (no install needed)
 node test/fuzz.js 5000                     # more random runs
+python test/presence_scenario.py http://localhost:8787  # one person in 3 tabs shows up once (cursor, name, dot, authorship)
 node test/wipe_scenario.js                 # Render wipe: logins + room locks come back (starts its own servers)
 python test/wipe_browser.py                # same in real Chrome: wipe mid-session, nobody logged out
 python test/e2e.py http://localhost:8787   # 4-user browser test (needs Python Playwright)
@@ -318,6 +319,12 @@ they depend on wait in a `pending` queue.
 
 **5. Relative cursors.** A cursor is stored as "after character `k3f9:42`", not as a
 number. When others type above you, your cursor and theirs stay in the right place.
+
+**5b. People, not tabs.** Every page load gets a fresh client ID, so one person with three
+tabs is three clients. Each cursor message carries `uid`, which the server sets to the verified
+account. The editor groups clients by `uid`, shows each person once (the tab whose cursor moved
+last), and hides your own other tabs. Authorship works the same way: the name registry stores
+`uid` with each client ID, so "Who wrote this" counts a person once, under their newest name.
 
 **6. Per-user undo.** The undo manager records only *your* operations, grouped every 500 ms
 (like VS Code). Undo deletes the characters you inserted and re-inserts copies of what you
@@ -423,7 +430,8 @@ test/local_account_scenario.py  login page without a server: opened as a file / 
 test/pages_scenario.py          page on a static host (GitHub Pages) + separate sync server, 3 people (26 checks)
 accounts.js         accounts and sessions on the server (scrypt hashes, rate limits, /api/...)
 seal.js             sealed tokens (AES-256-GCM) so logins and room locks survive a wiped disk
-test/wipe_scenario.js  server disk wiped: logins, renamed profiles, room locks, tampering (25 checks)
+test/presence_scenario.py  one person in several tabs: one name, one cursor, one dot, one author (20 checks)
+test/wipe_scenario.js  server disk wiped: logins, renamed profiles, room locks, tampering (26 checks)
 test/wipe_browser.py   wipe in the middle of a session in real Chrome (8 checks)
 terminals.js        shared terminals + debug sessions (server side, used by server.js)
 logo.svg            the dragon logo as a vector (also inlined in the page header)

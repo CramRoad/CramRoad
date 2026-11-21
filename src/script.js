@@ -26,7 +26,7 @@
 
   const HEAD = '^';            // ID of the invisible item that sits before the first character
   const FOLDERS = '__folders'; // registry entry that stores explicitly created (empty) folders
-  const USERS = '__users';     // registry entry: client ID -> {name, color} (for "who wrote this")
+  const USERS = '__users';     // registry entry: client ID -> {name, color, uid, at} (for "who wrote this")
   const HISTORY = '__history'; // registry entry: checkpoint ID -> {name, at, by, sv}
 
   // Total order on timestamps: higher Lamport clock wins, client ID breaks ties.
@@ -314,8 +314,8 @@
     }
 
     // For each line of a file: the client who typed most of its characters
-    // (used by "Who wrote this line?").
-    lineAuthors(fid) {
+    // (used by "Who wrote this line?"). keyOf can group clients, e.g. all tabs of one person.
+    lineAuthors(fid, keyOf = c => c) {
       const s = this.seqs.get(fid);
       const lines = [];
       let counts = new Map();
@@ -329,7 +329,8 @@
         for (let it = s.head.next; it; it = it.next) {
           if (it.deleted) continue;
           if (it.ch === '\n') { finish(); continue; }
-          counts.set(it.client, (counts.get(it.client) || 0) + 1);
+          const k = keyOf(it.client);
+          counts.set(k, (counts.get(k) || 0) + 1);
         }
       }
       finish();
@@ -1273,7 +1274,7 @@
       if (kind === 'file') {
         // Coloured dots: which teammates have this file open right now.
         const fid = pathToFid.get(path);
-        for (const peer of collabPeers.values()) {
+        for (const { peer } of peopleNow()) {
           if (!peer.state || peer.state.fid !== fid) continue;
           const dot = document.createElement('span');
           dot.className = 'presence-dot';
@@ -4656,12 +4657,15 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
   }
 
   // ---------- presence: who is here, where their cursor is ----------
+  // uid says which person this tab belongs to (the account; the server overwrites it with the
+  // verified one), so several tabs or devices of one person show up as one teammate.
   function awarenessState() {
     const fid = editorFid;
-    if (!fid) return { name: collabUser.name, color: collabUser.color, fid: null, path: '' };
+    const uid = myUserId();
+    if (!fid) return { name: collabUser.name, color: collabUser.color, uid, fid: null, path: '' };
     const backward = editor.selectionDirection === 'backward';
     const start = crdt.relAt(fid, editor.selectionStart), end = crdt.relAt(fid, editor.selectionEnd);
-    return { name: collabUser.name, color: collabUser.color, fid, path: fidToPath.get(fid) || '', a: backward ? end : start, h: backward ? start : end };
+    return { name: collabUser.name, color: collabUser.color, uid, fid, path: fidToPath.get(fid) || '', a: backward ? end : start, h: backward ? start : end };
   }
   let awTimer = null, lastAwSent = 0;
   function scheduleAwareness() {
@@ -4681,6 +4685,7 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
     return {
       name: String(state.name || 'Guest').slice(0, 24),
       color: /^#[0-9a-f]{3,8}$/i.test(state.color || '') ? state.color : '#94a3b8',
+      uid: typeof state.uid === 'string' && state.uid ? state.uid.slice(0, 64) : '',
       fid: typeof state.fid === 'string' ? state.fid : null,
       a: typeof state.a === 'string' ? state.a : null,
       h: typeof state.h === 'string' ? state.h : null
@@ -4690,11 +4695,40 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
     if (!client || client === collabClient) return;
     const state = cleanState(rawState);
     const prev = collabPeers.get(client);
-    collabPeers.set(client, { state, via, t: Date.now() });
-    if (!prev || !prev.state || !state || prev.state.fid !== state.fid || prev.state.name !== state.name || prev.state.color !== state.color) {
+    const now = Date.now();
+    // "moved": when this tab's cursor or file last changed (not the 10-second keep-alive), so
+    // the tab a person is actually using is the one shown.
+    const moved = prev && prev.state && state && prev.state.fid === state.fid && prev.state.a === state.a && prev.state.h === state.h ? prev.moved : now;
+    collabPeers.set(client, { state, via, t: now, moved });
+    if (!prev || !prev.state || !state || prev.state.fid !== state.fid || prev.state.name !== state.name || prev.state.color !== state.color || prev.state.uid !== state.uid) {
       renderProjectTree(); renderPeople();
     }
     renderRemoteCursors();
+  }
+  // Teammates as people, not tabs: one entry per person (their most recently used tab), and
+  // never yourself (your other tabs and devices are you). Returns [{ client, peer, tabs }].
+  function peopleNow() {
+    if (!collabPeers.size) return [];
+    let me = '';
+    try { me = myUserId(); } catch (e) {}
+    const best = new Map();
+    for (const [client, peer] of collabPeers) {
+      if (!peer.state) continue;
+      const key = peer.state.uid || 'tab:' + client;
+      if (me && key === me) continue;
+      const cur = best.get(key);
+      if (!cur) { best.set(key, { client, peer, tabs: 1 }); continue; }
+      cur.tabs++;
+      if (peer.moved > cur.peer.moved || (peer.moved === cur.peer.moved && peer.t > cur.peer.t)) { cur.client = client; cur.peer = peer; }
+    }
+    return Array.from(best.values());
+  }
+  // How many other tabs or devices of yours are in this room.
+  function myOtherTabs() {
+    let me = '', n = 0;
+    try { me = myUserId(); } catch (e) { return 0; }
+    for (const peer of collabPeers.values()) if (peer.state && peer.state.uid && peer.state.uid === me) n++;
+    return n;
   }
   function removePeer(client) {
     if (collabPeers.delete(client)) { renderProjectTree(); renderPeople(); renderRemoteCursors(); }
@@ -4716,14 +4750,13 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
   function renderPeople() {
     const host = document.getElementById('collabPeople');
     host.textContent = '';
-    for (const [client, peer] of collabPeers) {
-      if (!peer.state) continue;
+    for (const { client, peer, tabs } of peopleNow()) {
       const st = peer.state;
       const path = st.fid ? fidToPath.get(st.fid) : '';
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'person-chip';
-      chip.title = st.name + (path ? ' is editing ' + path + ' (click to jump to their cursor)' : '');
+      chip.title = st.name + (path ? ' is editing ' + path + ' (click to jump to their cursor)' : '') + (tabs > 1 ? '. Open in ' + tabs + ' tabs; showing the one they used last.' : '');
       const avatar = document.createElement('i');
       avatar.style.background = st.color;
       avatar.textContent = st.name.split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
@@ -4734,7 +4767,9 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
       host.appendChild(chip);
     }
     const me = document.getElementById('renameMe');
-    me.textContent = 'You: ' + collabUser.name;
+    const others = myOtherTabs();
+    me.textContent = 'You: ' + collabUser.name + (others ? ' · ' + (others + 1) + ' tabs' : '');
+    me.title = others ? 'You also have this room open in ' + others + ' other tab' + (others === 1 ? '' : 's') + ' or device' + (others === 1 ? '' : 's') + '. Their cursors are yours, so they are not shown.' : '';
     me.style.borderColor = collabUser.color;
   }
 
@@ -4767,7 +4802,7 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
         cursorLayer.appendChild(r);
       }
     }
-    for (const peer of collabPeers.values()) {
+    for (const { peer } of peopleNow()) {
       const st = peer.state;
       if (!st || st.fid !== editorFid || !st.h) continue;
       const h = crdt.indexAt(editorFid, st.h);
@@ -4973,40 +5008,69 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
   // =====================================================================
 
   // ---------- who is who (names for authorship and history) ----------
+  // Every page load is a new client ID; uid ties it to the person (account), and "at" lets the
+  // newest name and colour win, so a teammate who reloaded or renamed is still one author.
   function registerSelf() {
     const cur = crdt.get(DragonCRDT.USERS, collabClient);
-    if (!cur || cur.name !== collabUser.name || cur.color !== collabUser.color) {
-      crdt.set(DragonCRDT.USERS, collabClient, { name: collabUser.name, color: collabUser.color });
+    const uid = myUserId();
+    if (!cur || cur.name !== collabUser.name || cur.color !== collabUser.color || cur.uid !== uid) {
+      crdt.set(DragonCRDT.USERS, collabClient, { name: collabUser.name, color: collabUser.color, uid, at: Date.now() });
     }
   }
-  function userInfo(client) {
-    if (client === SEED) return { name: 'Starter template', color: '#64748b' };
-    const u = crdt.get(DragonCRDT.USERS, client);
-    if (u && typeof u.name === 'string') {
-      return { name: u.name.slice(0, 24), color: /^#[0-9a-f]{3,8}$/i.test(u.color || '') ? u.color : '#94a3b8' };
+  // client ID -> { key, name, color } for the person behind it.
+  function peopleIndex() {
+    const reg = crdt.reg.get(DragonCRDT.USERS);
+    const keyOf = new Map(), newest = new Map();
+    const cleanColor = c => /^#[0-9a-f]{3,8}$/i.test(c || '') ? c : '#94a3b8';
+    if (reg) for (const [client, e] of reg) {
+      const u = e.v;
+      if (!u || typeof u.name !== 'string') continue;
+      const name = u.name.slice(0, 24), color = cleanColor(u.color);
+      const key = typeof u.uid === 'string' && u.uid ? 'u:' + u.uid : 'n:' + name + '|' + color;
+      keyOf.set(client, key);
+      const at = Number(u.at) || 0;
+      const cur = newest.get(key);
+      if (!cur || at >= cur.at) newest.set(key, { key, name, color, at });
     }
-    return { name: 'Unknown', color: '#94a3b8' };
+    // Entries written before people had an ID (name and colour only) join the person with that
+    // name and colour, if there is exactly one.
+    const byLook = new Map();
+    for (const p of newest.values()) if (p.key.startsWith('u:')) { const look = 'n:' + p.name + '|' + p.color; byLook.set(look, byLook.has(look) ? null : p); }
+    return client => {
+      if (client === SEED) return { key: SEED, name: 'Starter template', color: '#64748b' };
+      const key = keyOf.get(client);
+      if (!key) return { key: 'c:' + client, name: 'Unknown', color: '#94a3b8' };
+      return (key.startsWith('n:') && byLook.get(key)) || newest.get(key);
+    };
   }
+  function userInfo(client) { return peopleIndex()(client); }
 
   // ---------- "Who wrote this?" gutter ----------
   function renderAuthorGutter() {
     const legend = document.getElementById('authorLegend');
     if (!authorsOn || !editorFid) { legend.hidden = true; return; }
-    const authors = crdt.lineAuthors(editorFid);
+    const person = peopleIndex();
+    const authors = crdt.lineAuthors(editorFid, c => person(c).key);
+    const byKey = new Map();
     // Legend: each person's share of the file's characters (the gutter shows each
     // line's main author, so someone who typed part of a line still gets credit here).
     const totals = new Map();
     const seq = crdt.seqs.get(editorFid);
-    if (seq) for (let it = seq.head.next; it; it = it.next) if (!it.deleted && it.ch !== '\n') totals.set(it.client, (totals.get(it.client) || 0) + 1);
-    lines.innerHTML = authors.map((client, i) => {
-      const info = client ? userInfo(client) : null;
+    if (seq) for (let it = seq.head.next; it; it = it.next) {
+      if (it.deleted || it.ch === '\n') continue;
+      const p = person(it.client);
+      byKey.set(p.key, p);
+      totals.set(p.key, (totals.get(p.key) || 0) + 1);
+    }
+    lines.innerHTML = authors.map((key, i) => {
+      const info = key ? byKey.get(key) : null;
       return '<span class="ln-author" style="--author:' + (info ? info.color : 'transparent') + '" title="Line ' + (i + 1) + ': ' +
         escapeHTML(info ? 'written by ' + info.name : 'empty line') + '">' + (i + 1) + '</span>';
     }).join('');
     syncScroll();
     const total = Array.from(totals.values()).reduce((a, b) => a + b, 0) || 1;
-    legend.innerHTML = '<span class="al-title">Who wrote this file</span>' + Array.from(totals).sort((a, b) => b[1] - a[1]).map(([client, n]) => {
-      const u = userInfo(client);
+    legend.innerHTML = '<span class="al-title">Who wrote this file</span>' + Array.from(totals).sort((a, b) => b[1] - a[1]).map(([key, n]) => {
+      const u = byKey.get(key);
       const pct = n * 100 / total;
       return '<span class="al-item"><i style="background:' + u.color + '"></i>' + escapeHTML(u.name) + ' <small>' + (pct < 1 ? '<1' : Math.round(pct)) + '% of the text</small></span>';
     }).join('');
