@@ -5,6 +5,8 @@
 // - Saves every operation to data/<room>.jsonl so documents survive a server restart.
 // - Optional room password: only its salted hash is stored, in data/<room>.meta.json.
 // - Accounts (name, email, password) at /api/...; joining a room needs a valid login.
+// - With DRAGON_SECRET set, browsers keep sealed copies of their login and of the room lock,
+//   so both come back after a host wipes the disk (Render free tier). See seal.js.
 // The server never merges text itself: clients do that with the CRDT. It only stores
 // operations, removes duplicates, and tells each client what it is missing.
 'use strict';
@@ -15,6 +17,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { createTerminalManager } = require('./terminals');
 const { createAccounts } = require('./accounts');
+const { createSealer } = require('./seal');
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -23,7 +26,8 @@ const ROOT = __dirname;
 const PUBLIC = { '/': 'index.html', '/index.html': 'index.html', '/sw.js': 'sw.js' };
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const accounts = createAccounts({ dataDir: DATA_DIR });
+const sealer = createSealer(process.env.DRAGON_SECRET);
+const accounts = createAccounts({ dataDir: DATA_DIR, sealer });
 
 
 // ---------------------------------------------------------------- rooms and storage
@@ -34,8 +38,8 @@ const safeRoom = name => String(name || 'main').replace(/[^\w-]/g, '').slice(0, 
 function getRoom(name) {
   let room = rooms.get(name);
   if (room) return room;
-  room = { name, log: [], sv: Object.create(null), pending: [], clients: new Set(), file: path.join(DATA_DIR, name + '.jsonl'), meta: path.join(DATA_DIR, name + '.meta.json'), passHash: null, salt: null };
-  try { const m = JSON.parse(fs.readFileSync(room.meta, 'utf8')); room.passHash = m.passHash || null; room.salt = m.salt || null; } catch (e) { /* no password */ }
+  room = { name, log: [], sv: Object.create(null), pending: [], clients: new Set(), file: path.join(DATA_DIR, name + '.jsonl'), meta: path.join(DATA_DIR, name + '.meta.json'), passHash: null, salt: null, sealAt: 0, seal: null };
+  try { const m = JSON.parse(fs.readFileSync(room.meta, 'utf8')); room.passHash = m.passHash || null; room.salt = m.salt || null; room.sealAt = m.sealAt || 0; } catch (e) { /* no password */ }
   if (fs.existsSync(room.file)) {
     const lines = fs.readFileSync(room.file, 'utf8').split('\n');
     const ops = [];
@@ -56,10 +60,41 @@ function checkPassword(room, password) {
   const want = Buffer.from(room.passHash, 'hex');
   return given.length === want.length && crypto.timingSafeEqual(given, want);
 }
+function saveMeta(room) {
+  fs.writeFileSync(room.meta, JSON.stringify({ passHash: room.passHash, salt: room.salt, sealAt: room.sealAt }));
+}
 function setPassword(room, password) {
   if (password) { room.salt = crypto.randomBytes(16).toString('hex'); room.passHash = hashPassword(room, password); }
   else { room.salt = null; room.passHash = null; }
-  fs.writeFileSync(room.meta, JSON.stringify({ passHash: room.passHash, salt: room.salt }));
+  room.sealAt = Date.now(); room.seal = null;
+  saveMeta(room);
+}
+// The room's lock (or "no lock") as a sealed token every member keeps. Only rooms that were
+// ever locked have one.
+function roomSeal(room) {
+  if (!sealer || !room.sealAt) return undefined;
+  if (!room.seal) room.seal = sealer.seal({ k: 'room', room: room.name, passHash: room.passHash, salt: room.salt, at: room.sealAt });
+  return room.seal;
+}
+// After a wiped disk the lock is gone; the first member who comes back restores it from their
+// sealed copy (only a newer one than the server has). Anyone who got in while the lock was
+// missing, without the password, is sent back to the password prompt.
+function restoreLock(room, text) {
+  const s = sealer && sealer.unseal(text);
+  if (!s || s.k !== 'room' || s.room !== room.name || !(s.at > (room.sealAt || 0))) return;
+  room.passHash = typeof s.passHash === 'string' ? s.passHash : null;
+  room.salt = typeof s.salt === 'string' ? s.salt : null;
+  room.sealAt = s.at; room.seal = text;
+  saveMeta(room);
+  console.log(`[room ${room.name}] password lock restored from a member's sealed copy (${room.passHash ? 'locked' : 'unlocked'})`);
+  for (const other of [...room.clients]) {
+    if (checkPassword(room, other.password)) continue;
+    room.clients.delete(other); other.room = null;
+    terminals.leave(room, other);
+    send(other, { t: 'denied', reason: 'locked' });
+    other.close(4001, 'room locked');
+    for (const c of room.clients) send(c, { t: 'aw-leave', client: other.client });
+  }
 }
 
 function validOp(op) {
@@ -120,10 +155,11 @@ const server = http.createServer((req, res) => {
   if (PUBLIC[pathname]) return sendFile(res, path.join(ROOT, PUBLIC[pathname]));
   if (pathname.startsWith('/api/')) { accounts.handleHttp(req, res, pathname); return; }
   if (pathname === '/health') {
-    const info = {};
-    for (const [name, r] of rooms) info[name] = { users: r.clients.size, operations: r.log.length };
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, rooms: info }));
+    // Counts only: room names are the secret part of a room link, so they are never listed.
+    let users = 0;
+    for (const r of rooms.values()) users += r.clients.size;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, users }));
     return;
   }
   res.writeHead(404); res.end('Not found');
@@ -158,6 +194,7 @@ wss.on('connection', ws => {
         return;
       }
       const room = getRoom(safeRoom(msg.room));
+      if (typeof msg.seal === 'string') restoreLock(room, msg.seal);
       if (!checkPassword(room, msg.password)) {
         send(ws, { t: 'denied', reason: msg.password ? 'wrong' : 'locked' });
         ws.close(4001, 'room locked');
@@ -166,6 +203,7 @@ wss.on('connection', ws => {
       ws.room = room;
       ws.client = String(msg.client || '').slice(0, 40);
       ws.account = account;
+      ws.password = typeof msg.password === 'string' ? msg.password.slice(0, 200) : '';
       ws.aw = withAccountName(ws, msg.state);
       ws.userId = 'acct-' + account.id;                  // terminal permissions follow the account
       // Same tab reconnecting (e.g. after Wi-Fi dropped): its old socket may still look open
@@ -174,7 +212,7 @@ wss.on('connection', ws => {
         if (other !== ws && other.client === ws.client) { other.replaced = true; room.clients.delete(other); try { other.terminate(); } catch (e) {} }
       }
       room.clients.add(ws);
-      send(ws, { t: 'welcome', sv: room.sv, locked: !!room.passHash, caps: terminals.capabilities(), account: accounts.publicUser(account) });
+      send(ws, { t: 'welcome', sv: room.sv, locked: !!room.passHash, seal: roomSeal(room), caps: terminals.capabilities(), account: accounts.publicUser(account), renew: accounts.renewal(msg.auth, account) || undefined });
       const ops = missingFor(room, msg.sv);
       for (let i = 0; i < ops.length; i += 2000) send(ws, { t: 'ops', ops: ops.slice(i, i + 2000) });
       for (const other of room.clients) if (other !== ws && other.aw) send(ws, { t: 'aw', client: other.client, state: other.aw });
@@ -199,7 +237,8 @@ wss.on('connection', ws => {
     } else if (msg.t === 'lock') {
       const password = String(msg.password || '').slice(0, 200);
       setPassword(room, password);
-      for (const client of room.clients) send(client, { t: 'locked', locked: !!password, by: ws.aw && ws.aw.name ? String(ws.aw.name).slice(0, 24) : 'Someone' });
+      ws.password = password;
+      for (const client of room.clients) send(client, { t: 'locked', locked: !!password, seal: roomSeal(room), by: ws.aw && ws.aw.name ? String(ws.aw.name).slice(0, 24) : 'Someone' });
     } else if (msg.t === 'aw') {
       const oldName = ws.aw && ws.aw.name;
       ws.aw = withAccountName(ws, msg.state);
@@ -232,11 +271,22 @@ const heartbeat = setInterval(() => {
 }, HEARTBEAT_MS);
 wss.on('close', () => clearInterval(heartbeat));
 setInterval(() => terminals.reap(rooms.values()), 60000).unref();
+
+// Optional: KEEP_AWAKE=1 on Render. The server visits its own public address every 10 minutes,
+// so the free instance does not spin down (and the next visitor does not wait a minute).
+// Render counts free hours per workspace: keep only one service awake like this.
+const SELF_URL = process.env.KEEP_AWAKE_URL || process.env.RENDER_EXTERNAL_URL || '';
+if (process.env.KEEP_AWAKE === '1' && SELF_URL && typeof fetch === 'function') {
+  setInterval(() => { fetch(SELF_URL.replace(/\/$/, '') + '/health', { cache: 'no-store' }).catch(() => {}); }, 10 * 60000).unref();
+}
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { terminals.shutdown(rooms.values()); process.exit(0); });
 
 server.listen(PORT, () => {
   console.log(`DRAGON sync server on http://localhost:${PORT}  (data in ${DATA_DIR})`);
   console.log(`Accounts: ${accounts.count()} (log in required to join rooms)`);
+  console.log(sealer ? 'Logins and room locks survive a wiped disk (DRAGON_SECRET is set)'
+    : 'Set DRAGON_SECRET (16+ characters) so logins and room locks survive a wiped disk (Render free tier)');
+  if (process.env.KEEP_AWAKE === '1') console.log(SELF_URL ? 'Keep-awake: visiting ' + SELF_URL + ' every 10 minutes' : 'KEEP_AWAKE=1 needs RENDER_EXTERNAL_URL or KEEP_AWAKE_URL');
   const caps = terminals.capabilities();
   if (!caps.terminal) console.log('Shared terminals and Debug: off (start with DRAGON_TERMINAL=1 to turn them on)');
   else console.log('Shared terminals and Debug: ON. Anyone who can open a terminal can run commands on this machine. Debuggers: ' +

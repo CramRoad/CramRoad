@@ -22,6 +22,7 @@ DRAGON is a browser code editor (15 languages, multi-file projects, live preview
 | **Undo survives reload** | Your undo history is saved for the tab, so Ctrl+Z still works after a reload. |
 | **Follow a teammate** | Click a teammate's name in the status bar (under the toolbar) to jump to their file and cursor. |
 | **Self-healing sync** | Every 20 seconds browser and server compare state vectors and fill any gap. |
+| ♻️ **Survives a wiped server** | Free hosts (Render) delete the server's disk when it sleeps. With `DRAGON_SECRET` set, projects, logins and room locks all come back from the browsers: nobody is logged out and a locked room stays locked. |
 
 ## Just want to open it?
 
@@ -157,8 +158,13 @@ On a static site alone the editor still works, but only as **This browser only**
 2. On render.com: **New → Web Service**, pick the repo. Language **Node**, build command
    `npm install`, start command `npm start`, instance type **Free**. Optional: health check
    path `/health`. Do **not** set `DRAGON_TERMINAL` (see the warning below).
-3. When it says **Live**, open `https://<your-app>.onrender.com/api/ping`. It must answer
-   `{"ok":true,"dragon":true,"accounts":true}`.
+3. Under **Environment**, add `DRAGON_SECRET` with a long random value (Render's **Generate**
+   button makes one). This is what keeps logins and room locks alive when Render wipes the
+   disk. Never share it or change it: changing it logs everyone out once.
+   Optional: `KEEP_AWAKE` = `1` stops the free instance from sleeping (keep only one service
+   awake like this: Render's free hours are shared by the whole workspace).
+4. When it says **Live**, open `https://<your-app>.onrender.com/api/ping`. It must answer
+   `{"ok":true,"dragon":true,"accounts":true,"keepsLogins":true}`.
 
 ### 2. Use rooms
 
@@ -177,11 +183,19 @@ On a static site alone the editor still works, but only as **This browser only**
 
 - It spins down after 15 minutes with no traffic; the next visit waits up to a minute while it
   starts. An open editor tab sends a message every 20 s, so it stays awake while anyone is in.
-- Its disk is wiped whenever it spins down, restarts or redeploys. **Projects survive** (every
-  browser keeps the whole project and resends what the server is missing), but **accounts are
-  wiped**: everyone sees the login page again and must *Create account* again (same email is
-  fine). To keep accounts, use a paid instance with a persistent disk and set `DATA_DIR` to the
-  disk's mount path, or run the server on your own machine.
+  `KEEP_AWAKE=1` keeps it up even when nobody is in.
+- Its disk is wiped whenever it spins down, restarts or redeploys. Everything still comes back:
+  - **Projects:** every browser keeps the whole project and resends what the server is missing.
+  - **Logins (needs `DRAGON_SECRET`):** a login token is *sealed*: it also carries an encrypted
+    copy of the account (AES-256-GCM, key from the secret; the browser cannot read or change
+    it). The first time a logged-in browser reconnects, the server rebuilds the account from it.
+    Nobody is logged out, and the password works on new devices again.
+  - **Room locks (needs `DRAGON_SECRET`):** members keep a sealed copy of the lock. The first
+    member back restores it, and anyone who slipped in without the password is sent to the
+    password prompt.
+  - Without `DRAGON_SECRET`, accounts are wiped: everyone must *Create account* again.
+  - Note: the first deploy after adding the secret wipes the disk once, so create the accounts
+    again one last time. From then on they survive.
 
 ### Alternative: your laptop + a free Cloudflare quick tunnel
 
@@ -228,6 +242,8 @@ disk. The address changes every time you start the tunnel, and the laptop must s
 ```bash
 npm test                                   # CRDT scenarios + random fuzz (no install needed)
 node test/fuzz.js 5000                     # more random runs
+node test/wipe_scenario.js                 # Render wipe: logins + room locks come back (starts its own servers)
+python test/wipe_browser.py                # same in real Chrome: wipe mid-session, nobody logged out
 python test/e2e.py http://localhost:8787   # 4-user browser test (needs Python Playwright)
 python test/account_scenario.py http://localhost:8787   # account page, login, Settings, themes
 python test/pages_scenario.py http://localhost:8787     # page on a static site (like GitHub Pages) + this server
@@ -349,11 +365,23 @@ and detach. Every `term-input` is checked on the server:
   (arrival - clock) seen on that socket, and input more than 2.5 s above that baseline was
   held up in the network, so it is refused rather than run.
 
+**14. Surviving a wiped server.** A free Render instance loses its disk every time it sleeps.
+The CRDT already makes projects safe: browsers resend whatever the server's state vector is
+missing. Accounts and room locks are server-only data, so the server gives each browser a
+*sealed* copy (`seal.js`): JSON encrypted with AES-256-GCM under a key derived from
+`DRAGON_SECRET`. GCM is authenticated, so a changed byte makes it unreadable; only the server
+can open it. A login token carries the account (with its scrypt hash, never the password);
+a room seal carries the lock's salted hash and a timestamp, and only a newer seal than the
+server's can be applied, so an old copy cannot undo a later unlock.
+
 ## Known limits (say these honestly in the demo)
 
 - Accounts have no email check and no "forgot password" (no email is sent). An admin can
-  delete an account from `data/accounts.json`. Hosts that wipe the disk on redeploy also
-  wipe accounts.
+  delete an account from `data/accounts.json`. On a wiped disk, an account comes back only
+  when one of its logged-in browsers reconnects (set `DRAGON_SECRET`); if someone signs up
+  with that email first, the new account wins. A log-out is remembered by the server, so a
+  wipe also forgets it: a copied token of a logged-out session would work again until it
+  expires (the browser itself deletes its token at log-out).
 - A locked room's password is one shared password on top of each person's login.
 - Edits made offline stay in that browser until it reconnects. If someone edits offline and
   closes the tab, their edits sync the next time they open the room link in the same browser.
@@ -394,6 +422,9 @@ test/accounts_helper.py    creates real accounts for the browser tests
 test/local_account_scenario.py  login page without a server: opened as a file / plain web server (30 checks)
 test/pages_scenario.py          page on a static host (GitHub Pages) + separate sync server, 3 people (26 checks)
 accounts.js         accounts and sessions on the server (scrypt hashes, rate limits, /api/...)
+seal.js             sealed tokens (AES-256-GCM) so logins and room locks survive a wiped disk
+test/wipe_scenario.js  server disk wiped: logins, renamed profiles, room locks, tampering (25 checks)
+test/wipe_browser.py   wipe in the middle of a session in real Chrome (8 checks)
 terminals.js        shared terminals + debug sessions (server side, used by server.js)
 logo.svg            the dragon logo as a vector (also inlined in the page header)
 favicon.svg         the browser-tab icon (also inlined in the page)

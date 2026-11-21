@@ -4436,7 +4436,7 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
     socket.onopen = () => {
       if (ws !== socket) return;
       wsOpen = true; lastHeard = Date.now();
-      wsSend({ t: 'hello', room: collabRoom, client: collabClient, sv: crdt.sv, state: awarenessState(), password: collabPassword || undefined, user: collabIdentity, auth: collabAuth && !collabAuth.local ? collabAuth.token : undefined });
+      wsSend({ t: 'hello', room: collabRoom, client: collabClient, sv: crdt.sv, state: awarenessState(), password: collabPassword || undefined, seal: roomSealCopy() || undefined, user: collabIdentity, auth: collabAuth && !collabAuth.local ? collabAuth.token : undefined });
       updateSyncBadge();
     };
     socket.onmessage = e => {
@@ -4503,7 +4503,9 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
       welcomed = true; wsRetry = 0;
       termCaps = msg.caps || null;
       updateRuntimeUi();
+      if (typeof msg.renew === 'string' && serverAccount()) { collabAuth.token = msg.renew; saveAuth(collabAuth); }
       accountFromServer(msg.account);
+      keepRoomSeal(msg.seal);
       roomLocked = !!msg.locked;
       updateLockButton();
       // Coming back with offline edits: keep "my version before the merge" as a checkpoint.
@@ -4531,6 +4533,7 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
       updateSyncBadge();
       setTimeout(askPassword, 50);
     } else if (msg.t === 'locked' && via === 'ws') {
+      keepRoomSeal(msg.seal);
       roomLocked = !!msg.locked;
       updateLockButton();
       collabToast(msg.locked ? (msg.by || 'Someone') + ' locked this room with a password. You stay connected.' : (msg.by || 'Someone') + ' removed the room password.');
@@ -5305,6 +5308,10 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
   let collabPassword = '';
   try { collabPassword = sessionStorage.getItem('dragonPw:' + collabRoom) || ''; } catch (e) {}
   function rememberPassword(pw) { collabPassword = pw; try { sessionStorage.setItem('dragonPw:' + collabRoom, pw); } catch (e) {} }
+  // The server's sealed copy of this room's lock. The browser cannot read it; it only hands it
+  // back on connect, so a server whose disk was wiped (free hosting) can restore the lock.
+  function roomSealCopy() { try { return localStorage.getItem('dragonSeal:' + collabRoom) || ''; } catch (e) { return ''; } }
+  function keepRoomSeal(seal) { if (typeof seal === 'string' && seal) { try { localStorage.setItem('dragonSeal:' + collabRoom, seal); } catch (e) {} } }
   function updateLockButton() {
     const b = document.getElementById('lockRoom');
     b.textContent = collabDenied ? '🔑 Enter password' : (roomLocked ? '🔒 Room locked' : '🔓 Lock room');
@@ -5830,7 +5837,9 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
     collabAuth.user.theme = currentTheme;
     saveAuth(collabAuth);
     if (collabAuth.local) updateLocalAccount({ theme: currentTheme });
-    else api('/api/me', { method: 'PATCH', token: collabAuth.token, body: { theme: currentTheme } }).catch(() => {});
+    else api('/api/me', { method: 'PATCH', token: collabAuth.token, body: { theme: currentTheme } })
+      .then(data => { if (data && typeof data.token === 'string' && serverAccount()) { collabAuth.token = data.token; saveAuth(collabAuth); } })
+      .catch(() => {});
   }
   // Keep keyboard focus inside an open dialog: everything else becomes inert.
   function setAppInert(on, keep) {
@@ -6046,6 +6055,7 @@ pyodidePromise.catch(function(error) { self.postMessage({ type: 'bootError', err
     try {
       const data = await api('/api/me', { method: 'PATCH', token: collabAuth.token, body: { name, color: setColor } });
       collabAuth.user = data.user;
+      if (typeof data.token === 'string') collabAuth.token = data.token;
       saveAuth(collabAuth);
       applyProfileLocal(data.user.name, data.user.color);
       closeSettings();

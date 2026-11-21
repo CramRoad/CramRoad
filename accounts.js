@@ -3,9 +3,13 @@
 //
 // - Passwords are hashed with scrypt and a random salt per account. The password itself is
 //   never stored or logged.
-// - Logging in returns a random 256-bit session token. Only its SHA-256 is stored, so a copy
-//   of the data folder does not let anyone log in. Sessions last DRAGON_SESSION_DAYS
-//   (default 30) or until logout.
+// - Logging in returns a session token. Only its SHA-256 is stored, so a copy of the data
+//   folder does not let anyone log in. Sessions last DRAGON_SESSION_DAYS (default 30) or
+//   until logout.
+// - With DRAGON_SECRET set, the token is sealed (see seal.js): it also carries an encrypted
+//   copy of the account. Free hosts such as Render wipe the disk when the server sleeps or
+//   redeploys; the next time a logged-in browser connects, the server restores the account
+//   from its token, so nobody has to sign up again. Without the secret, tokens are random.
 // - Joining a room needs a valid session (checked in server.js), so the login page is
 //   enforced by the server, not only shown by the browser.
 // - Rate limits slow down password guessing: per email and per address.
@@ -43,11 +47,13 @@ async function passwordMatches(password, stored) {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 
-function createAccounts({ dataDir }) {
+function createAccounts({ dataDir, sealer = null }) {
   const accountsFile = path.join(dataDir, 'accounts.json');
   const sessionsFile = path.join(dataDir, 'sessions.json');
   let accounts = [];
-  const sessions = new Map();                         // sha256(token) -> { id, exp }
+  // sha256(token) -> { id, exp, sid }. A renewed token keeps its session id (sid), so logging
+  // out ends every token of that login; 'sid:<sid>' -> { revoked, exp } records that.
+  const sessions = new Map();
   try { accounts = JSON.parse(fs.readFileSync(accountsFile, 'utf8')).accounts || []; } catch (e) { /* none yet */ }
   try { for (const [h, s] of Object.entries(JSON.parse(fs.readFileSync(sessionsFile, 'utf8')))) sessions.set(h, s); } catch (e) { /* none yet */ }
   // Same work for unknown emails as for real ones, so timing does not reveal who has an account.
@@ -68,18 +74,60 @@ function createAccounts({ dataDir }) {
   const byId = id => accounts.find(a => a.id === id) || null;
   const publicUser = a => ({ id: a.id, name: a.name, email: a.email, color: a.color, theme: a.theme });
 
-  function newSession(account) {
-    const token = crypto.randomBytes(32).toString('base64url');
-    sessions.set(sha256(token), { id: account.id, exp: Date.now() + SESSION_MS });
+  // What a sealed token carries so the account can be rebuilt after a wiped disk.
+  const SNAPSHOT_KEYS = ['id', 'name', 'email', 'pass', 'color', 'theme', 'createdAt'];
+  const snapshot = a => Object.fromEntries(SNAPSHOT_KEYS.map(k => [k, a[k]]));
+
+  function newSession(account, sid) {
+    const exp = Date.now() + SESSION_MS;
+    sid = sid || crypto.randomBytes(16).toString('base64url');
+    const token = sealer
+      ? sealer.seal({ k: 'session', sid, exp, a: snapshot(account) })
+      : crypto.randomBytes(32).toString('base64url');
+    sessions.set(sha256(token), { id: account.id, exp, sid });
     saveSessions();
     return token;
   }
-  // The account for a session token, or null (unknown, expired, or account removed).
+  const loggedOut = sid => !!(sid && sessions.has('sid:' + sid));
+  // The account for a session token, or null (unknown, expired, logged out, or account removed).
   function verify(token) {
-    if (typeof token !== 'string' || token.length < 20 || token.length > 200) return null;
-    const s = sessions.get(sha256(token));
-    if (!s || s.exp < Date.now()) return null;
-    return byId(s.id);
+    if (typeof token !== 'string' || token.length < 20 || token.length > 8192) return null;
+    const h = sha256(token);
+    const s = sessions.get(h);
+    if (s) return s.revoked || s.exp < Date.now() || loggedOut(s.sid) ? null : byId(s.id);
+    // Not known here: if the disk was wiped, a sealed token brings its account back.
+    const data = sealer && sealer.unseal(token);
+    if (!data || data.k !== 'session' || !(data.exp > Date.now()) || !data.a || typeof data.a.id !== 'string' || loggedOut(data.sid)) return null;
+    let account = byId(data.a.id);
+    if (!account) {
+      const a = data.a;
+      if (typeof a.email !== 'string' || !EMAIL_RE.test(a.email) || byEmail(a.email)) return null;   // email signed up again since: that account wins
+      account = {
+        id: a.id, name: cleanName(a.name).slice(0, 24) || 'Teammate', email: a.email, pass: String(a.pass || ''),
+        color: COLORS.includes(a.color) ? a.color : COLORS[0], theme: THEMES.includes(a.theme) ? a.theme : 'classic',
+        createdAt: a.createdAt || new Date().toISOString(), restoredAt: new Date().toISOString()
+      };
+      accounts.push(account);
+      saveAccounts();
+      console.log('[accounts] restored ' + account.email + ' from a sealed login (the data folder had been wiped)');
+    }
+    sessions.set(h, { id: account.id, exp: data.exp, sid: data.sid });
+    saveSessions();
+    return account;
+  }
+  // A new token when the browser's copy is out of date (older format, changed name, colour or
+  // theme, or past half its life), so a restore after a wipe brings back the latest details.
+  function renewal(token, account) {
+    if (!sealer || !account) return null;
+    const data = sealer.unseal(token);
+    const fresh = data && data.k === 'session' && data.a && data.exp - Date.now() > SESSION_MS / 2 &&
+      SNAPSHOT_KEYS.every(k => data.a[k] === account[k]);
+    if (fresh) return null;
+    // Same login, new token: it keeps the session id, so one log-out ends both.
+    const old = typeof token === 'string' ? sessions.get(sha256(token)) : null;
+    let sid = (data && data.sid) || (old && old.sid);
+    if (!sid && old) { sid = crypto.randomBytes(16).toString('base64url'); old.sid = sid; }   // token from before the secret was set
+    return newSession(account, sid);
   }
 
   // ---------- rate limits (in memory) ----------
@@ -149,16 +197,28 @@ function createAccounts({ dataDir }) {
     return { token: newSession(account), user: publicUser(account) };
   }
 
+  // Ends this login and every renewed token of it. It is remembered as logged out (until those
+  // tokens would have expired), so a sealed copy cannot bring the session back.
   function logout(token) {
-    if (typeof token === 'string' && sessions.delete(sha256(token))) saveSessions();
+    if (typeof token !== 'string') return;
+    const h = sha256(token);
+    const s = sessions.get(h);
+    const data = !s && sealer ? sealer.unseal(token) : null;
+    const sid = (s && s.sid) || (data && data.k === 'session' && data.sid);
+    if (s) sessions.set(h, Object.assign({}, s, { revoked: true }));
+    else if (data && data.k === 'session' && data.a) sessions.set(h, { id: data.a.id, exp: data.exp, revoked: true });
+    else return;
+    if (sid) sessions.set('sid:' + sid, { revoked: true, exp: Date.now() + SESSION_MS });
+    saveSessions();
   }
 
-  function update(account, body) {
+  function update(account, body, token) {
     if (body.name !== undefined) account.name = checkName(body.name);
     if (body.color !== undefined) { if (!COLORS.includes(body.color)) throw httpError(400, 'Unknown colour.'); account.color = body.color; }
     if (body.theme !== undefined) { if (!THEMES.includes(body.theme)) throw httpError(400, 'Unknown theme.'); account.theme = body.theme; }
     saveAccounts();
-    return { user: publicUser(account) };
+    const renewed = renewal(token, account);
+    return renewed ? { user: publicUser(account), token: renewed } : { user: publicUser(account) };
   }
 
   // ---------- HTTP: /api/... ----------
@@ -191,14 +251,15 @@ function createAccounts({ dataDir }) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return true; }
     try {
-      if (pathname === '/api/ping') send(res, 200, { ok: true, dragon: true, accounts: true });   // "is this a DRAGON server?"
+      if (pathname === '/api/ping') send(res, 200, { ok: true, dragon: true, accounts: true, keepsLogins: !!sealer });   // "is this a DRAGON server?"
       else if (pathname === '/api/signup' && req.method === 'POST') send(res, 201, await signup(await readJson(req), addressOf(req)));
       else if (pathname === '/api/login' && req.method === 'POST') send(res, 200, await login(await readJson(req), addressOf(req)));
       else if (pathname === '/api/logout' && req.method === 'POST') { logout(bearer(req)); send(res, 204); }
       else if (pathname === '/api/me' && (req.method === 'GET' || req.method === 'PATCH')) {
-        const account = verify(bearer(req));
+        const token = bearer(req);
+        const account = verify(token);
         if (!account) throw httpError(401, 'Please log in again.');
-        send(res, 200, req.method === 'GET' ? { user: publicUser(account) } : update(account, await readJson(req)));
+        send(res, 200, req.method === 'GET' ? { user: publicUser(account) } : update(account, await readJson(req), token));
       }
       else throw httpError(404, 'Not found.');
     } catch (e) {
@@ -208,7 +269,7 @@ function createAccounts({ dataDir }) {
     return true;
   }
 
-  return { verify, publicUser, handleHttp, count: () => accounts.length };
+  return { verify, renewal, publicUser, handleHttp, count: () => accounts.length, keepsLogins: !!sealer };
 }
 
 module.exports = { createAccounts };

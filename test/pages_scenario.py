@@ -57,7 +57,8 @@ with sync_playwright() as p:
     pages = []
 
     def person():
-        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        # Share link copies to the clipboard; headless Chrome needs the permission granted.
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900}, permissions=["clipboard-read", "clipboard-write"])
         ctx.add_init_script(INIT)
         pg = ctx.new_page()
         pages.append(pg)
